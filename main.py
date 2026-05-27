@@ -1,40 +1,51 @@
-from fastapi import FastAPI ,UploadFile, File
+from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
-from utils import extract_text_from_pdf
+from utils import extract_text_from_pdf, chunk_text_by_type
+from rag import store_chunks_in_db
 
-# Initialize the app
 app = FastAPI(title="Autonomous ATS-Buster API")
 
-# Define our expected data structure
-class JobDescriptionUpload(BaseModel):
-    company_name: str
-    job_role: str
-    jd_text: str
-
-# Health check endpoint
 @app.get("/")
 def read_root():
     return {"status": "Agent is online and ready."}
 
-# Mock endpoint for testing
-@app.post("/analyze-jd/")
-def analyze_jd(payload: JobDescriptionUpload):
-    return {
-        "message": f"Received JD for {payload.job_role} at {payload.company_name}",
-        "received_text_length": len(payload.jd_text)
-    }
-
-# NEW: Endpoint to handle PDF uploads
-@app.post("/upload-pdf/")
-async def upload_pdf_file(file: UploadFile = File(...)):
-    # Read the incoming file as raw bytes
+# ROUTE 1: Master Data (Extracts, Chunks, and Saves to Database)
+@app.post("/upload-master/")
+async def upload_master(file: UploadFile = File(...)):
     file_bytes = await file.read()
+    text = extract_text_from_pdf(file_bytes)
+    chunks = chunk_text_by_type(text, doc_type="master")
     
-    # Extract text using PyMuPDF
-    extracted_text = extract_text_from_pdf(file_bytes)
+    chunks_saved = store_chunks_in_db(chunks, file.filename)
     
     return {
         "filename": file.filename,
-        "character_count": len(extracted_text),
-        "preview": extracted_text[:400]  # Return the first 400 characters to verify it worked
+        "chunks_saved_to_db": chunks_saved,
+        "message": "Master Data memorized successfully."
+    }
+
+# ROUTE 2: Job Description (Extracts and holds whole text)
+@app.post("/upload-jd/")
+async def upload_jd(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    text = extract_text_from_pdf(file_bytes)
+    chunks = chunk_text_by_type(text, doc_type="jd")
+    
+    return {
+        "filename": file.filename,
+        "status": "Ready for analysis",
+        "jd_text_preview": chunks[0][:300]
+    }
+
+# ROUTE 3: Current Resume (Extracts and chunks for skill gaps)
+@app.post("/upload-resume/")
+async def upload_resume(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    text = extract_text_from_pdf(file_bytes)
+    chunks = chunk_text_by_type(text, doc_type="resume")
+    
+    return {
+        "filename": file.filename,
+        "total_chunks": len(chunks),
+        "status": "Resume loaded for gap analysis"
     }
