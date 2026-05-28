@@ -12,17 +12,25 @@ vector_store = Chroma(
     persist_directory="./chroma_db" 
 )
 
+# UPDATED: This function now clears old data before storing new data
 def store_chunks_in_db(chunks: list[str], source_filename: str) -> int:
     """
-    Converts text chunks into embeddings and stores them locally in ChromaDB.
+    Automatically clears out any existing records in ChromaDB,
+    then generates new embeddings and stores the fresh chunks.
     """
-    # Create metadata so the AI knows where the data came from
-    metadatas = [{"source": source_filename, "chunk_index": i} for i in range(len(chunks))]
+    # 1. Fetch and delete all existing entries in the database
+    existing_data = vector_store.get()
+    old_ids = existing_data.get("ids", [])
     
-    # Generate unique IDs for the database records
+    if old_ids:
+        print(f"--- AUTO-CLEANUP: Removing {len(old_ids)} old chunks from ChromaDB ---")
+        vector_store.delete(ids=old_ids)
+    
+    # 2. Setup metadata and unique IDs for the new chunks
+    metadatas = [{"source": source_filename, "chunk_index": i} for i in range(len(chunks))]
     ids = [f"{source_filename}_{uuid.uuid4()}" for _ in chunks]
     
-    # Save everything to the database
+    # 3. Store the new chunks
     vector_store.add_texts(texts=chunks, metadatas=metadatas, ids=ids)
     
     return len(chunks)

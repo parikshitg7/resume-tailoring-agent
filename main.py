@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from utils import extract_text_from_pdf, chunk_text_by_type
 from rag import store_chunks_in_db
 from agent import analyze_job_description
+from graph import ats_agent
+
 
 app = FastAPI(title="Autonomous ATS-Buster API")
 
@@ -23,18 +25,23 @@ async def upload_master(file: UploadFile = File(...)):
     }
 
 # UPDATED: This now triggers the Groq API for lightning-fast analysis
+# UPDATED: This now triggers the entire Agentic Loop!
 @app.post("/upload-jd/")
 async def upload_jd(file: UploadFile = File(...)):
     file_bytes = await file.read()
     text = extract_text_from_pdf(file_bytes)
     
-    # Run the Groq structured analysis engine
-    structured_analysis = analyze_job_description(text)
+    # 1. Initialize the State with the raw JD text
+    initial_state = {"jd_text": text}
     
+    # 2. Run the LangGraph state machine
+    final_state = ats_agent.invoke(initial_state)
+    
+    # 3. Return the drafted text and the exact memories used
     return {
-        "filename": file.filename,
-        "status": "Analysis Completed by Groq (Llama 3)",
-        "analysis": structured_analysis
+        "status": "Resume Tailored Successfully",
+        "retrieved_memories_used": len(final_state["retrieved_experiences"]),
+        "tailored_draft": final_state["drafted_resume"]
     }
 
 @app.post("/upload-resume/")
