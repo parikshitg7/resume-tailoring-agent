@@ -1,74 +1,92 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import Response
-import tempfile
 import os
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
+from typing import Optional
 
-from utils import extract_text_from_pdf, chunk_text_by_type
-from rag import store_chunks_in_db
-from resume_parser import parse_resume_structure
-from graph import ats_agent 
+from utils import extract_text_from_pdf, chunk_master_text
+from rag import store_and_retrieve_master_data
+from graph import build_resume_graph
+from document_generator import generate_resume_docx
 
 app = FastAPI(title="Autonomous ATS-Buster API")
 
-@app.get("/")
-def read_root():
-    return {"status": "Agent is online and ready."}
+def cleanup_file(file_path: str):
+    """Deletes the temporary file after it has been sent to the user."""
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        print(f"--- CLEANUP: Removed temporary file {file_path} ---")
 
-# --- 1. The Memory Upload (Unchanged) ---
-@app.post("/upload-master/")
-async def upload_master(file: UploadFile = File(...)):
-    """Upload your master PDF once to save it to your local ChromaDB vector database."""
-    file_bytes = await file.read()
-    text = extract_text_from_pdf(file_bytes)
-    chunks = chunk_text_by_type(text, doc_type="master")
-    chunks_saved = store_chunks_in_db(chunks, file.filename)
-    return {
-        "filename": file.filename,
-        "chunks_saved_to_db": chunks_saved,
-        "message": "Master Data memorized successfully."
-    }
-
-# --- 2. The New XML Injection Generation Route ---
 @app.post("/generate-resume/")
 async def generate_resume(
-    jd_file: UploadFile = File(..., description="Upload the Job Description PDF"),
-    base_resume: UploadFile = File(..., description="Upload your formatted base .docx resume")
+    background_tasks: BackgroundTasks,
+    current_resume: UploadFile = File(..., description="Upload your current base resume (PDF)"),
+    jd_file: UploadFile = File(..., description="Upload the Target Job Description (PDF)"),
+    master_file: Optional[UploadFile] = File(None, description="Upload your Master Resume/Data (PDF)"),
+    master_text: Optional[str] = Form(None, description="Or paste your master data text here")
 ):
-    """
-    Upload a JD and your Base Resume. The agent will read the JD, query your Master Memory,
-    draft elite bullet points, and surgically inject them into your Base Resume format.
-    """
-    # 1. Extract the text from the JD
-    jd_bytes = await jd_file.read()
-    jd_text = extract_text_from_pdf(jd_bytes)
-    
-    # 2. Save the uploaded .docx to a temporary file so python-docx can read it
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as temp_docx:
-        temp_docx.write(await base_resume.read())
-        temp_docx_path = temp_docx.name
-        
     try:
-        # 3. Use the "Eyes": Parse the visual structure of your uploaded Word doc
-        resume_structure = parse_resume_structure(temp_docx_path)
+        print("--- API ENDPOINT HIT: /generate-resume/ ---")
         
-        # 4. Use the "Brain & Hands": Trigger the LangGraph State Machine
+        # 1. Extract Text from Uploaded PDFs
+        current_resume_bytes = await current_resume.read()
+        jd_bytes = await jd_file.read()
+        
+        raw_current_resume_text = extract_text_from_pdf(current_resume_bytes)
+        raw_jd_text = extract_text_from_pdf(jd_bytes)
+        
+        # 2. Handle Master Data (Either File or Text)
+        raw_master_text = ""
+        if master_file:
+            master_bytes = await master_file.read()
+            raw_master_text = extract_text_from_pdf(master_bytes)
+        elif master_text:
+            raw_master_text = master_text
+            
+        if not raw_master_text:
+            raise HTTPException(
+                status_code=400, 
+                detail="You must provide either a master_file or master_text."
+            )
+            
+        # 3. SMART RAG ROUTER: Check if the master data needs chunking
+        word_count = len(raw_master_text.split())
+        final_master_context = ""
+        
+        if word_count > 1500: # Roughly 2-3 pages
+            print(f"--- ROUTER: Master data is {word_count} words. Initiating RAG Pipeline. ---")
+            master_chunks = chunk_master_text(raw_master_text)
+            final_master_context = store_and_retrieve_master_data(master_chunks, jd_query=raw_jd_text)
+        else:
+            print(f"--- ROUTER: Master data is {word_count} words. Bypassing RAG for direct injection. ---")
+            final_master_context = raw_master_text
+            
+        # 4. Trigger the Brain (LangGraph)
+        workflow = build_resume_graph()
         initial_state = {
-            "jd_text": jd_text,
-            "resume_structure": resume_structure
+            "raw_current_resume_text": raw_current_resume_text,
+            "raw_jd_text": raw_jd_text,
+            "raw_master_text": final_master_context, # Inject the smartly routed context here
+            "structured_resume_data": {}
         }
-        final_state = ats_agent.invoke(initial_state)
         
-        # 5. Extract the final binary Word file from the state
-        final_docx_bytes = final_state["output_docx_bytes"]
+        final_state = workflow.invoke(initial_state)
+        resume_data = final_state.get("structured_resume_data", {})
         
-        # 6. Stream the perfectly formatted file directly to your browser
-        return Response(
-            content=final_docx_bytes,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": 'attachment; filename="Tailored_ATS_Resume.docx"'}
+        if not resume_data or "personal_info" not in resume_data:
+            raise ValueError("LangGraph failed to generate valid structured data.")
+        
+        # 5. Trigger the Hands (Document Generator)
+        output_file_path = generate_resume_docx(resume_data)
+        
+        # 6. Send the file to the user and queue the cleanup task
+        background_tasks.add_task(cleanup_file, output_file_path)
+        
+        return FileResponse(
+            path=output_file_path,
+            filename="Tailored_ATS_Resume.docx",
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
         
-    finally:
-        # 7. Clean up the temporary file from your local hard drive
-        if os.path.exists(temp_docx_path):
-            os.remove(temp_docx_path)
+    except Exception as e:
+        print(f"ERROR in /generate-resume/: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

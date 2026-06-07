@@ -1,4 +1,5 @@
 import fitz  # PyMuPDF
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """
@@ -21,3 +22,15 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     except Exception as e:
         print(f"Error extracting text via PyMuPDF: {e}")
         return ""
+
+def chunk_master_text(text: str) -> list[str]:
+    """
+    Splits the Master Data into overlapping chunks optimized for semantic search.
+    Chunk size 800 ensures entire project blocks stay together.
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=150,
+        separators=["\n\n", "\n", " ", ""]
+    )
+    return splitter.split_text(text)
