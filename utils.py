@@ -1,38 +1,24 @@
-import fitz
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+import fitz  # PyMuPDF
 
-def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extracts text from PDF bytes using PyMuPDF."""
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    extracted_text = ""
-    for page in doc:
-        page_text = page.get_text("text")
-        if page_text:
-            extracted_text += page_text + "\n"
-    return " ".join(extracted_text.split())
-
-def chunk_text_by_type(text: str, doc_type: str) -> list[str]:
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """
-    Splits text dynamically based on the document type.
+    Extracts raw text from a PDF file stream using the high-speed PyMuPDF engine.
+    Used for reading the Job Description, Master PDF, and Current Resume.
     """
-    if doc_type == "master":
-        # Small chunks for precise skill matching (e.g., finding Java projects)
-        size = 600
-        overlap = 100
-    elif doc_type == "resume":
-        # Larger chunks to keep whole roles together
-        size = 1200
-        overlap = 200
-    elif doc_type == "jd":
-        # Job Descriptions are kept whole, no chunking
-        return [text]
-    else:
-        size = 1000
-        overlap = 200
-
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=size,
-        chunk_overlap=overlap,
-        separators=["\n\n", "\n", ".", " ", ""]
-    )
-    return text_splitter.split_text(text)
+    text = ""
+    try:
+        # Open the PDF directly from the byte stream in memory
+        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        
+        # Iterate through all pages and extract block text
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            # 'text' extraction preserves basic reading order better than raw coordinates
+            text += page.get_text("text") + "\n"
+            
+        pdf_document.close()
+        return text.strip()
+        
+    except Exception as e:
+        print(f"Error extracting text via PyMuPDF: {e}")
+        return ""
