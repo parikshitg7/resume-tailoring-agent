@@ -3,7 +3,7 @@ import fitz  # PyMuPDF
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     """
     Extracts raw text from a PDF file stream using the high-speed PyMuPDF engine.
-    Used for reading the Job Description, Master PDF, and Current Resume.
+    Used for reading the Job Description and Current/Master Resumes.
     """
     text = ""
     try:
@@ -13,7 +13,6 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         # Iterate through all pages and extract block text
         for page_num in range(len(pdf_document)):
             page = pdf_document.load_page(page_num)
-            # 'text' extraction preserves basic reading order better than raw coordinates
             text += page.get_text("text") + "\n"
             
         pdf_document.close()
