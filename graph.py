@@ -1,13 +1,12 @@
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, Dict, Any
 from agent import extract_static_info_node, strategic_matcher_node
 
+# The central memory object passed between nodes
 class ResumeAgentState(TypedDict):
     raw_current_resume_text: str
     raw_jd_text: str
     raw_master_text: str 
-    target_keywords: List[str]
-    mandatory_skills: List[str]
     structured_resume_data: Dict[str, Any]
 
 def build_resume_graph():
@@ -26,5 +25,5 @@ def build_resume_graph():
     workflow.add_edge("extract_static", "strategic_match")
     workflow.add_edge("strategic_match", END)
     
-    # Compile the graph
+    # Compile and return the executable graph
     return workflow.compile()
