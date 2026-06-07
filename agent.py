@@ -1,8 +1,11 @@
 import os
+from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List
 from schemas import PersonalInformation, Education, Experience, Project
+
+load_dotenv()
 
 # ==========================================
 # 1. STANDALONE NODES SCHEMAS
